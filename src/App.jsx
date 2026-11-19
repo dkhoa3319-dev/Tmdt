@@ -34,8 +34,8 @@ const Icon = ({ name, className = "w-5 h-5", fill = "none" }) => {
     clipboard: <><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" /><rect x="8" y="2" width="8" height="4" rx="1" ry="1" /></>,
     settings: <><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" /></>,
     arrowLeft: <><line x1="19" y1="12" x2="5" y2="12" /><polyline points="12 19 5 12 12 5" /></>,
-    eye: <><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" /></>,
-    star: <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />,
+    user: <><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></>,
+    refresh: <><polyline points="23 4 23 10 17 10" /><polyline points="1 20 1 14 7 14" /><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" /></>,
   };
 
   return (
@@ -76,7 +76,10 @@ class ErrorBoundary extends React.Component {
             </p>
             <button
               onClick={() => {
-                try { localStorage.clear(); } catch (e) {}
+                try {
+                  localStorage.clear();
+                  sessionStorage.clear();
+                } catch (e) {}
                 window.location.reload();
               }}
               className="w-full py-3 bg-indigo-600 text-white rounded-xl font-semibold hover:bg-indigo-700 transition"
@@ -92,13 +95,52 @@ class ErrorBoundary extends React.Component {
 }
 
 // ==========================================
-// 3. HELPER UTILITIES & INITIAL DATA
+// 3. ISOLATED CUSTOMER SESSION & STORAGE HELPERS
 // ==========================================
+// Mỗi phiên truy cập (tab / khách hàng riêng) được cấp một Session ID độc lập
+// để giỏ hàng và danh sách yêu thích không bao giờ bị trùng hoặc rò rỉ giữa các khách hàng.
+const getCustomerSessionId = () => {
+  try {
+    let sid = sessionStorage.getItem('ms_customer_session_id');
+    if (!sid) {
+      const rand =
+        typeof crypto !== 'undefined' && crypto.randomUUID
+          ? crypto.randomUUID()
+          : `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
+      sid = `cust_${rand}`;
+      sessionStorage.setItem('ms_customer_session_id', sid);
+    }
+    return sid;
+  } catch (e) {
+    return `cust_mem_${Date.now()}`;
+  }
+};
+
+const resetCustomerSessionId = () => {
+  try {
+    const oldSid = sessionStorage.getItem('ms_customer_session_id');
+    if (oldSid) {
+      sessionStorage.removeItem(`ms_cart_${oldSid}`);
+      sessionStorage.removeItem(`ms_fav_${oldSid}`);
+    }
+    const rand =
+      typeof crypto !== 'undefined' && crypto.randomUUID
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
+    const newSid = `cust_${rand}`;
+    sessionStorage.setItem('ms_customer_session_id', newSid);
+    return newSid;
+  } catch (e) {
+    return `cust_mem_${Date.now()}`;
+  }
+};
+
 const formatVND = (amount) => {
   return new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(Number(amount) || 0);
 };
 
-const safeLoadStorage = (key, fallback) => {
+// Dữ liệu dùng chung toàn cửa hàng (Sản phẩm, Danh mục, Đơn hàng, Cấu hình) -> localStorage
+const safeLoadSharedStorage = (key, fallback) => {
   try {
     const raw = localStorage.getItem(key);
     if (!raw) return fallback;
@@ -112,9 +154,29 @@ const safeLoadStorage = (key, fallback) => {
   }
 };
 
-const safeSaveStorage = (key, value) => {
+const safeSaveSharedStorage = (key, value) => {
   try {
     localStorage.setItem(key, JSON.stringify(value));
+    return true;
+  } catch (e) {
+    return false;
+  }
+};
+
+// Dữ liệu riêng biệt cho từng phiên khách hàng (Giỏ hàng, Yêu thích) -> sessionStorage theo Session ID
+const safeLoadSessionData = (key, fallback) => {
+  try {
+    const raw = sessionStorage.getItem(key);
+    if (!raw) return fallback;
+    return JSON.parse(raw);
+  } catch (e) {
+    return fallback;
+  }
+};
+
+const safeSaveSessionData = (key, value) => {
+  try {
+    sessionStorage.setItem(key, JSON.stringify(value));
     return true;
   } catch (e) {
     return false;
@@ -126,7 +188,6 @@ const normalizeImageUrl = (rawUrl) => {
   if (!rawUrl || typeof rawUrl !== 'string') return '';
   let url = rawUrl.trim();
 
-  // 1. Google Images redirect URL (google.com/imgres?imgurl=...)
   if (url.includes('google.com/imgres') || url.includes('imgurl=')) {
     try {
       const parsed = new URL(url);
@@ -135,7 +196,6 @@ const normalizeImageUrl = (rawUrl) => {
     } catch (e) {}
   }
 
-  // 2. Google Drive URLs
   const drivePatterns = [
     /drive\.google\.com\/file\/d\/([a-zA-Z0-9_-]+)/,
     /drive\.google\.com\/open\?id=([a-zA-Z0-9_-]+)/,
@@ -152,7 +212,7 @@ const normalizeImageUrl = (rawUrl) => {
   return url;
 };
 
-// Nén ảnh tải lên từ thiết bị qua HTML5 Canvas để tránh tràn localStorage
+// Nén ảnh tải lên từ thiết bị qua HTML5 Canvas
 const compressImageFile = (file, maxWidth = 900, quality = 0.8) => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -306,7 +366,7 @@ class AmbientMelodyPlayer {
     this.interval = null;
     this.isPlaying = false;
     this.step = 0;
-    this.notes = [261.63, 329.63, 392.00, 493.88, 523.25, 493.88, 392.00, 329.63]; // Cmaj7 arpeggio
+    this.notes = [261.63, 329.63, 392.00, 493.88, 523.25, 493.88, 392.00, 329.63];
   }
 
   start() {
@@ -436,23 +496,52 @@ const SmartProductImage = ({ src, alt, className = "" }) => {
 // 7. MAIN APPLICATION
 // ==========================================
 function MelodyStoreMain() {
-  // Persistent State
-  const [products, setProducts] = useState(() => safeLoadStorage('ms_products_v2', DEFAULT_PRODUCTS));
-  const [categories, setCategories] = useState(() => safeLoadStorage('ms_categories_v2', DEFAULT_CATEGORIES));
-  const [settings, setSettings] = useState(() => safeLoadStorage('ms_settings_v2', DEFAULT_SETTINGS));
-  const [orders, setOrders] = useState(() => safeLoadStorage('ms_orders_v2', DEFAULT_ORDERS));
-  const [favorites, setFavorites] = useState(() => safeLoadStorage('ms_favorites_v2', ['prod-101']));
-  const [cart, setCart] = useState(() =>
-    safeLoadStorage('ms_cart_v2', [{ productId: 'prod-101', quantity: 1 }])
-  );
+  // Dọn dẹp khóa giỏ hàng/yêu thích dùng chung cũ (nếu có) để chống rò rỉ giữa các khách hàng
+  useEffect(() => {
+    try {
+      localStorage.removeItem('ms_cart_v2');
+      localStorage.removeItem('ms_favorites_v2');
+      localStorage.removeItem('melody_cart');
+    } catch (e) {}
+  }, []);
 
-  // Sync to localStorage
-  useEffect(() => { safeSaveStorage('ms_products_v2', products); }, [products]);
-  useEffect(() => { safeSaveStorage('ms_categories_v2', categories); }, [categories]);
-  useEffect(() => { safeSaveStorage('ms_settings_v2', settings); }, [settings]);
-  useEffect(() => { safeSaveStorage('ms_orders_v2', orders); }, [orders]);
-  useEffect(() => { safeSaveStorage('ms_favorites_v2', favorites); }, [favorites]);
-  useEffect(() => { safeSaveStorage('ms_cart_v2', cart); }, [cart]);
+  // Mã phiên khách hàng độc lập cho từng tab / từng khách truy cập
+  const [sessionId, setSessionId] = useState(() => getCustomerSessionId());
+
+  // Dữ liệu dùng chung của Cửa hàng (Sản phẩm, Danh mục, Cấu hình, Đơn hàng)
+  const [products, setProducts] = useState(() => safeLoadSharedStorage('ms_products_v2', DEFAULT_PRODUCTS));
+  const [categories, setCategories] = useState(() => safeLoadSharedStorage('ms_categories_v2', DEFAULT_CATEGORIES));
+  const [settings, setSettings] = useState(() => safeLoadSharedStorage('ms_settings_v2', DEFAULT_SETTINGS));
+  const [orders, setOrders] = useState(() => safeLoadSharedStorage('ms_orders_v2', DEFAULT_ORDERS));
+
+  // Dữ liệu GIỎ HÀNG & YÊU THÍCH RIÊNG BIỆT theo từng phiên khách hàng (mặc định trống [])
+  const [favorites, setFavorites] = useState(() => safeLoadSessionData(`ms_fav_${sessionId}`, []));
+  const [cart, setCart] = useState(() => safeLoadSessionData(`ms_cart_${sessionId}`, []));
+
+  // Sync Shared Data -> localStorage
+  useEffect(() => { safeSaveSharedStorage('ms_products_v2', products); }, [products]);
+  useEffect(() => { safeSaveSharedStorage('ms_categories_v2', categories); }, [categories]);
+  useEffect(() => { safeSaveSharedStorage('ms_settings_v2', settings); }, [settings]);
+  useEffect(() => { safeSaveSharedStorage('ms_orders_v2', orders); }, [orders]);
+
+  // Sync Isolated Customer Session Data -> sessionStorage (chỉ thuộc về phiên khách hàng hiện tại)
+  useEffect(() => { safeSaveSessionData(`ms_fav_${sessionId}`, favorites); }, [favorites, sessionId]);
+  useEffect(() => { safeSaveSessionData(`ms_cart_${sessionId}`, cart); }, [cart, sessionId]);
+
+  // Lắng nghe sự kiện storage từ tab khác: chỉ đồng bộ sản phẩm/danh mục/cấu hình, KHÔNG bao giờ đồng bộ giỏ hàng của khách khác
+  useEffect(() => {
+    const handleStorageSync = (e) => {
+      if (!e.key || !e.newValue) return;
+      try {
+        if (e.key === 'ms_products_v2') setProducts(JSON.parse(e.newValue));
+        if (e.key === 'ms_categories_v2') setCategories(JSON.parse(e.newValue));
+        if (e.key === 'ms_settings_v2') setSettings(JSON.parse(e.newValue));
+        if (e.key === 'ms_orders_v2') setOrders(JSON.parse(e.newValue));
+      } catch (err) {}
+    };
+    window.addEventListener('storage', handleStorageSync);
+    return () => window.removeEventListener('storage', handleStorageSync);
+  }, []);
 
   // UI Navigation & Filters
   const [viewMode, setViewMode] = useState('store'); // 'store' | 'admin'
@@ -505,8 +594,18 @@ function MelodyStoreMain() {
     setTimeout(() => setToastMsg(null), 3200);
   };
 
+  // Bắt đầu phiên mua sắm mới (nếu nhiều khách dùng chung 1 máy/trình duyệt tại quầy)
+  const handleNewCustomerSession = () => {
+    const freshSid = resetCustomerSessionId();
+    setSessionId(freshSid);
+    setFavorites([]);
+    setCart([]);
+    setCheckoutForm({ customerName: '', phone: '', address: '', email: '', paymentMethod: '' });
+    showToast('Đã tạo giỏ hàng mới cho khách hàng tiếp theo!', 'info');
+  };
+
   // ==========================================
-  // FAVORITE & CART LOGIC (Yêu thích tự động vào giỏ hàng)
+  // FAVORITE & CART LOGIC (Cô lập tuyệt đối theo từng khách hàng)
   // ==========================================
   const toggleFavorite = (product, e) => {
     if (e) e.stopPropagation();
@@ -525,7 +624,7 @@ function MelodyStoreMain() {
         if (existing) return prev;
         return [...prev, { productId: product.id, quantity: 1 }];
       });
-      showToast(`Đã thích & thêm "${product.name}" vào giỏ hàng!`, 'success');
+      showToast(`Đã thích & thêm "${product.name}" vào giỏ hàng của bạn!`, 'success');
     }
   };
 
@@ -542,7 +641,7 @@ function MelodyStoreMain() {
       }
       return [...prev, { productId: product.id, quantity: Math.min(product.stock, qty) }];
     });
-    showToast(`Đã thêm "${product.name}" vào giỏ hàng`, 'success');
+    showToast(`Đã thêm "${product.name}" vào giỏ hàng của bạn`, 'success');
   };
 
   const updateCartQty = (productId, delta) => {
@@ -568,7 +667,7 @@ function MelodyStoreMain() {
     setCart((prev) => prev.filter((item) => item.productId !== productId));
   };
 
-  // Enriched Cart Items
+  // Enriched Cart Items (Chỉ tính từ giỏ hàng riêng của khách hiện tại)
   const cartDetails = useMemo(() => {
     return cart
       .map((item) => {
@@ -612,7 +711,6 @@ function MelodyStoreMain() {
     e.preventDefault();
     if (!isCheckoutValid) return;
 
-    // Tạo mã đơn hàng duy nhất & chống gửi trùng
     const now = new Date();
     const datePart = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`;
     const randPart = Math.floor(1000 + Math.random() * 9000);
@@ -626,6 +724,7 @@ function MelodyStoreMain() {
 
     const newOrder = {
       id: orderId,
+      sessionId,
       customerName: checkoutForm.customerName.trim(),
       phone: checkoutForm.phone.trim(),
       email: checkoutForm.email.trim(),
@@ -643,7 +742,6 @@ function MelodyStoreMain() {
       estimatedDelivery: formattedDeliveryDate,
     };
 
-    // Lưu đơn hàng, trừ tồn kho & làm sạch giỏ hàng
     setSubmittedOrderIds((prev) => [...prev, orderId]);
     setOrders((prev) => [newOrder, ...prev]);
     setProducts((prev) =>
@@ -653,7 +751,9 @@ function MelodyStoreMain() {
         return { ...p, stock: Math.max(0, p.stock - bought.quantity) };
       })
     );
+    // Làm sạch giỏ hàng & yêu thích của phiên hiện tại sau khi đặt hàng thành công
     setCart([]);
+    setFavorites([]);
     setIsCheckoutOpen(false);
     setIsCartOpen(false);
     setCheckoutForm({ customerName: '', phone: '', address: '', email: '', paymentMethod: '' });
@@ -676,7 +776,7 @@ function MelodyStoreMain() {
   // ADMIN STATE & HANDLERS
   // ==========================================
   const [adminTab, setAdminTab] = useState('stats'); // 'stats' | 'products' | 'categories' | 'orders' | 'settings'
-  const [editingProduct, setEditingProduct] = useState(null); // null | object
+  const [editingProduct, setEditingProduct] = useState(null);
   const [productForm, setProductForm] = useState({
     name: '',
     category: '',
@@ -813,7 +913,6 @@ function MelodyStoreMain() {
     setCategories((prev) =>
       prev.map((c) => (c.id === cat.id ? { ...c, name: trimmed, description: editCatDesc.trim() } : c))
     );
-    // Cập nhật tên danh mục trên các sản phẩm liên quan
     setProducts((prev) => prev.map((p) => (p.category === cat.name ? { ...p, category: trimmed } : p)));
     setEditingCatId(null);
     showToast('Đã cập nhật danh mục!', 'success');
@@ -994,13 +1093,6 @@ function MelodyStoreMain() {
                 >
                   Khám phá sản phẩm
                 </a>
-                <button
-                  onClick={() => setIsCartOpen(true)}
-                  className="px-5 py-3 rounded-xl bg-white/15 hover:bg-white/25 text-white font-semibold text-sm backdrop-blur-md border border-white/20 transition flex items-center gap-2"
-                >
-                  <Icon name="heart" className="w-4 h-4 text-rose-400" fill="currentColor" />
-                  <span>Yêu thích & Giỏ hàng ({totalCartItems})</span>
-                </button>
               </div>
             </div>
           </section>
@@ -1128,11 +1220,12 @@ function MelodyStoreMain() {
                           onClick={(e) => {
                             e.stopPropagation();
                             addToCart(product, 1);
+                            setIsCheckoutOpen(true);
                           }}
                           className="px-3.5 py-2 rounded-xl bg-slate-900 text-white text-xs font-semibold hover:bg-indigo-600 disabled:bg-slate-300 transition flex items-center gap-1.5"
                         >
                           <Icon name="cart" className="w-3.5 h-3.5" />
-                          <span>Thêm giỏ</span>
+                          <span>Mua hàng</span>
                         </button>
                       </div>
                     </div>
@@ -1828,15 +1921,34 @@ function MelodyStoreMain() {
       )}
 
       {/* ==========================================
-          DRAWER 2: GIỎ HÀNG & YÊU THÍCH
+          DRAWER 2: GIỎ HÀNG RIÊNG BIỆT CỦA KHÁCH HÀNG
       ========================================== */}
       {isCartOpen && (
         <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex justify-end">
           <div className="bg-white w-full max-w-md h-full flex flex-col shadow-2xl">
-            <div className="p-5 border-b border-slate-200 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Icon name="cart" className="w-5 h-5 text-indigo-600" />
-                <h2 className="font-extrabold text-lg text-slate-900">Giỏ hàng của bạn ({totalCartItems})</h2>
+            <div className="p-5 border-b border-slate-200 flex items-center justify-between gap-2">
+              <div>
+                <div className="flex items-center gap-2">
+                  <Icon name="cart" className="w-5 h-5 text-indigo-600" />
+                  <h2 className="font-extrabold text-lg text-slate-900">Giỏ hàng của bạn ({totalCartItems})</h2>
+                </div>
+                <div className="flex items-center gap-2 mt-1">
+                  <span className="text-[11px] text-slate-400 flex items-center gap-1">
+                    <Icon name="user" className="w-3 h-3" />
+                    Phiên riêng: {sessionId.slice(0, 12)}
+                  </span>
+                  {cartDetails.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={handleNewCustomerSession}
+                      title="Làm mới giỏ hàng cho khách hàng khác"
+                      className="text-[11px] text-indigo-600 hover:underline flex items-center gap-0.5 font-medium"
+                    >
+                      <Icon name="refresh" className="w-3 h-3" />
+                      <span>Khách mới</span>
+                    </button>
+                  )}
+                </div>
               </div>
               <button onClick={() => setIsCartOpen(false)} className="p-2 rounded-full hover:bg-slate-100">
                 <Icon name="x" className="w-5 h-5" />
@@ -1846,9 +1958,9 @@ function MelodyStoreMain() {
             <div className="flex-1 overflow-y-auto p-5 space-y-4">
               {cartDetails.length === 0 ? (
                 <div className="text-center py-16 space-y-3">
-                  <p className="text-slate-500 text-sm">Giỏ hàng đang trống.</p>
+                  <p className="text-slate-500 text-sm">Giỏ hàng của bạn đang trống.</p>
                   <p className="text-xs text-slate-400">
-                    Nhấn biểu tượng trái tim trên sản phẩm để lưu yêu thích và tự động thêm vào giỏ!
+                    Nhấn biểu tượng trái tim trên sản phẩm để lưu yêu thích và tự động thêm vào giỏ hàng riêng của bạn!
                   </p>
                 </div>
               ) : (
