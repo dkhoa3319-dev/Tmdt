@@ -36,6 +36,10 @@ const Icon = ({ name, className = "w-5 h-5", fill = "none" }) => {
     arrowLeft: <><line x1="19" y1="12" x2="5" y2="12" /><polyline points="12 19 5 12 12 5" /></>,
     user: <><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></>,
     refresh: <><polyline points="23 4 23 10 17 10" /><polyline points="1 20 1 14 7 14" /><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" /></>,
+    lock: <><rect x="3" y="11" width="18" height="11" rx="2" ry="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></>,
+    eye: <><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" /></>,
+    eyeOff: <><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" /><line x1="1" y1="1" x2="23" y2="23" /></>,
+    logOut: <><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><polyline points="16 17 21 12 16 7" /><line x1="21" y1="12" x2="9" y2="12" /></>,
   };
 
   return (
@@ -337,6 +341,8 @@ const DEFAULT_SETTINGS = {
   bannerSubtitle: 'Khám phá bộ sưu tập thiết bị âm thanh, nhạc cụ và phụ kiện chính hãng. Nhấn biểu tượng trái tim để lưu ngay sản phẩm yêu thích vào giỏ hàng!',
   bannerGradient: 'from-slate-900 via-indigo-950 to-purple-900',
   bannerImageUrl: '',
+  adminUsername: 'admin',
+  adminPassword: '123',
 };
 
 const DEFAULT_ORDERS = [
@@ -545,6 +551,11 @@ function MelodyStoreMain() {
 
   // UI Navigation & Filters
   const [viewMode, setViewMode] = useState('store'); // 'store' | 'admin'
+  const [isAdminAuthenticated, setIsAdminAuthenticated] = useState(() => safeLoadSessionData('ms_admin_auth', false));
+  const [isAdminLoginOpen, setIsAdminLoginOpen] = useState(false);
+  const [adminLoginForm, setAdminLoginForm] = useState({ username: '', password: '' });
+  const [adminLoginError, setAdminLoginError] = useState('');
+  const [showAdminPass, setShowAdminPass] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState('Tất cả');
   const [searchQuery, setSearchQuery] = useState('');
   const [toastMsg, setToastMsg] = useState(null);
@@ -592,6 +603,43 @@ function MelodyStoreMain() {
   const showToast = (message, type = 'success') => {
     setToastMsg({ message, type });
     setTimeout(() => setToastMsg(null), 3200);
+  };
+
+  // Xác thực đăng nhập trang quản trị Admin
+  const handleRequestAdminAccess = () => {
+    if (isAdminAuthenticated) {
+      setViewMode('admin');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    } else {
+      setAdminLoginForm({ username: '', password: '' });
+      setAdminLoginError('');
+      setShowAdminPass(false);
+      setIsAdminLoginOpen(true);
+    }
+  };
+
+  const handleAdminLoginSubmit = (e) => {
+    e.preventDefault();
+    const expectedUser = (settings.adminUsername || 'admin').trim();
+    const expectedPass = settings.adminPassword || '123';
+    if (adminLoginForm.username.trim() === expectedUser && adminLoginForm.password === expectedPass) {
+      setIsAdminAuthenticated(true);
+      safeSaveSessionData('ms_admin_auth', true);
+      setIsAdminLoginOpen(false);
+      setAdminLoginError('');
+      setViewMode('admin');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      showToast('Đăng nhập quản trị thành công!', 'success');
+    } else {
+      setAdminLoginError('Tên đăng nhập hoặc mật khẩu không chính xác!');
+    }
+  };
+
+  const handleAdminLogout = () => {
+    setIsAdminAuthenticated(false);
+    safeSaveSessionData('ms_admin_auth', false);
+    setViewMode('store');
+    showToast('Đã đăng xuất khỏi trang quản trị', 'info');
   };
 
   // Bắt đầu phiên mua sắm mới (nếu nhiều khách dùng chung 1 máy/trình duyệt tại quầy)
@@ -1032,14 +1080,24 @@ function MelodyStoreMain() {
               </button>
             )}
 
-            {viewMode === 'admin' ? (
-              <button
-                onClick={() => setViewMode('store')}
-                className="px-4 py-2 rounded-xl bg-slate-900 text-white text-sm font-semibold hover:bg-slate-800 flex items-center gap-2 transition shadow-sm"
-              >
-                <Icon name="arrowLeft" className="w-4 h-4" />
-                <span>Quay lại Cửa hàng</span>
-              </button>
+            {viewMode === 'admin' && isAdminAuthenticated ? (
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setViewMode('store')}
+                  className="px-3.5 py-2 rounded-xl bg-slate-900 text-white text-xs sm:text-sm font-semibold hover:bg-slate-800 flex items-center gap-1.5 transition shadow-sm"
+                >
+                  <Icon name="arrowLeft" className="w-4 h-4" />
+                  <span>Cửa hàng</span>
+                </button>
+                <button
+                  onClick={handleAdminLogout}
+                  title="Đăng xuất tài khoản Admin"
+                  className="px-3 py-2 rounded-xl bg-rose-50 text-rose-600 border border-rose-200 text-xs sm:text-sm font-semibold hover:bg-rose-100 flex items-center gap-1.5 transition"
+                >
+                  <Icon name="logOut" className="w-4 h-4" />
+                  <span className="hidden sm:inline">Đăng xuất</span>
+                </button>
+              </div>
             ) : (
               <button
                 onClick={() => setIsCartOpen(true)}
@@ -1240,7 +1298,7 @@ function MelodyStoreMain() {
       {/* ==========================================
           ADMIN DASHBOARD VIEW
       ========================================== */}
-      {viewMode === 'admin' && (
+      {viewMode === 'admin' && isAdminAuthenticated && (
         <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 py-6 sm:py-8 space-y-6">
           <div className="bg-white rounded-2xl border border-slate-200 p-5 sm:p-6 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div>
@@ -1721,6 +1779,33 @@ function MelodyStoreMain() {
                   </div>
                 </div>
 
+                <div className="pt-3 space-y-3 border-t border-slate-100">
+                  <div className="text-xs font-bold text-slate-800 uppercase tracking-wide flex items-center gap-1.5">
+                    <Icon name="lock" className="w-3.5 h-3.5 text-indigo-600" />
+                    <span>Tài khoản đăng nhập Admin</span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-600 mb-1">Tên đăng nhập Admin</label>
+                      <input
+                        type="text"
+                        value={settings.adminUsername ?? 'admin'}
+                        onChange={(e) => setSettings({ ...settings, adminUsername: e.target.value })}
+                        className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-600 mb-1">Mật khẩu Admin</label>
+                      <input
+                        type="text"
+                        value={settings.adminPassword ?? '123'}
+                        onChange={(e) => setSettings({ ...settings, adminPassword: e.target.value })}
+                        className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm"
+                      />
+                    </div>
+                  </div>
+                </div>
+
                 <div className="pt-2 space-y-2.5 border-t border-slate-100">
                   <label className="flex items-center justify-between cursor-pointer">
                     <span className="text-sm font-medium text-slate-700">Hiệu ứng nốt nhạc rơi 5 giây khi vào web</span>
@@ -1786,10 +1871,7 @@ function MelodyStoreMain() {
         <div className="border-t border-slate-800/90 py-5 px-4 text-center">
           <button
             type="button"
-            onClick={() => {
-              setViewMode('admin');
-              window.scrollTo({ top: 0, behavior: 'smooth' });
-            }}
+            onClick={handleRequestAdminAccess}
             className="text-xs text-slate-400 hover:text-white transition cursor-pointer"
           >
             Bản quyền thuộc về © Tiendat 2026
@@ -2408,6 +2490,111 @@ function MelodyStoreMain() {
                 className="px-6 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-bold hover:bg-indigo-700"
               >
                 Lưu sản phẩm
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* ==========================================
+          MODAL 6: ĐĂNG NHẬP QUẢN TRỊ ADMIN
+      ========================================== */}
+      {isAdminLoginOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-950/75 backdrop-blur-xs flex items-center justify-center p-4">
+          <form
+            onSubmit={handleAdminLoginSubmit}
+            className="bg-white rounded-3xl max-w-md w-full p-6 sm:p-8 shadow-2xl space-y-5 border border-slate-100"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="w-11 h-11 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0">
+                  <Icon name="lock" className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-extrabold text-slate-900">Đăng nhập Quản trị</h3>
+                  <p className="text-xs text-slate-500">Vui lòng xác thực tài khoản Admin để tiếp tục</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsAdminLoginOpen(false)}
+                className="p-2 rounded-full hover:bg-slate-100 text-slate-500"
+              >
+                <Icon name="x" className="w-5 h-5" />
+              </button>
+            </div>
+
+            {adminLoginError && (
+              <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-600 text-xs font-semibold flex items-center gap-2">
+                <Icon name="alert" className="w-4 h-4 shrink-0" />
+                <span>{adminLoginError}</span>
+              </div>
+            )}
+
+            <div className="space-y-3.5">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Tên đăng nhập *</label>
+                <div className="relative">
+                  <Icon name="user" className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
+                  <input
+                    type="text"
+                    required
+                    autoFocus
+                    value={adminLoginForm.username}
+                    onChange={(e) => {
+                      setAdminLoginForm({ ...adminLoginForm, username: e.target.value });
+                      if (adminLoginError) setAdminLoginError('');
+                    }}
+                    placeholder="Nhập tên đăng nhập"
+                    className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:border-indigo-500 outline-none"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Mật khẩu *</label>
+                <div className="relative">
+                  <Icon name="lock" className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
+                  <input
+                    type={showAdminPass ? 'text' : 'password'}
+                    required
+                    value={adminLoginForm.password}
+                    onChange={(e) => {
+                      setAdminLoginForm({ ...adminLoginForm, password: e.target.value });
+                      if (adminLoginError) setAdminLoginError('');
+                    }}
+                    placeholder="Nhập mật khẩu"
+                    className="w-full pl-10 pr-10 py-2.5 rounded-xl border border-slate-200 text-sm focus:border-indigo-500 outline-none"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowAdminPass((s) => !s)}
+                    className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-600 p-0.5"
+                    title={showAdminPass ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}
+                  >
+                    <Icon name={showAdminPass ? 'eyeOff' : 'eye'} className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-slate-50 border border-slate-200/80 rounded-xl p-3 text-[11px] text-slate-500">
+              Tài khoản mặc định: <strong className="text-slate-700">{settings.adminUsername || 'admin'}</strong> / Mật khẩu: <strong className="text-slate-700">{settings.adminPassword || '123'}</strong> (có thể đổi trong phần Cấu hình Admin).
+            </div>
+
+            <div className="flex gap-2.5 pt-1">
+              <button
+                type="button"
+                onClick={() => setIsAdminLoginOpen(false)}
+                className="flex-1 py-2.5 rounded-xl bg-slate-100 text-slate-700 text-sm font-semibold hover:bg-slate-200 transition"
+              >
+                Hủy
+              </button>
+              <button
+                type="submit"
+                className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-bold hover:bg-indigo-700 transition shadow-md"
+              >
+                Đăng nhập
               </button>
             </div>
           </form>
