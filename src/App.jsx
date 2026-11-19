@@ -43,7 +43,6 @@ export default function App() {
   const [editP, setEditP] = useState(null);
   const [pForm, setPForm] = useState({ name: '', category: 'Piano', price: '', image: '', specs: '' });
   const [toast, setToast] = useState('');
-
   useEffect(() => { localStorage.setItem('mh_p3', JSON.stringify(products)); }, [products]);
   useEffect(() => { localStorage.setItem('mh_o3', JSON.stringify(orders)); }, [orders]);
   useEffect(() => { localStorage.setItem('mh_e3', JSON.stringify(cfg)); }, [cfg]);
@@ -91,7 +90,7 @@ export default function App() {
     setProducts(editP ? products.map((p) => p.id === editP.id ? item : p) : [item, ...products]);
     msg(editP ? 'Đã cập nhật' : 'Đã thêm mới'); setEditP(null); setPForm({ name: '', category: 'Piano', price: '', image: '', specs: '' });
   };
-     return (
+                    return (
     <div className="min-h-screen bg-[#FAF8F5] text-stone-900 font-sans">
       {toast && <div className="fixed bottom-5 right-5 z-50 bg-stone-900 text-white px-4 py-2.5 rounded-xl shadow-lg flex items-center gap-2 text-sm"><CheckCircle2 className="w-4 h-4 text-amber-400" />{toast}</div>}
 
@@ -164,8 +163,7 @@ export default function App() {
           })}
         </div>
       </main>
-
-      <footer className="border-t border-stone-200 bg-white mt-10">
+            <footer className="border-t border-stone-200 bg-white mt-10">
         <div className="max-w-7xl mx-auto px-4 py-7 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-stone-500">
           <div className="flex items-center gap-4">
             <span className="inline-flex items-center gap-1"><MapPin className="w-3.5 h-3.5" />Quận 1, TP.HCM</span>
@@ -174,7 +172,8 @@ export default function App() {
           <button onClick={onFooterTap} className="select-none">© 2026 Maison Harmonie. Bảo lưu mọi quyền.</button>
         </div>
       </footer>
-                  {view && (
+
+      {view && (
         <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4">
           <div className="bg-white rounded-3xl max-w-xl w-full overflow-hidden">
             <div className="flex items-center justify-between px-5 py-3.5 border-b">
@@ -332,20 +331,20 @@ export default function App() {
               {tab === 'emailjs' && (
                 <div className="space-y-3">
                   <div className="grid sm:grid-cols-2 gap-2.5">
-                    <input placeholder="Service ID" value={cfg.serviceId} onChange={(e) => setCfg({ ...cfg, serviceId: e.target.value })} className="px-3 py-2 rounded-xl border text-sm" />
-                    <input placeholder="Template ID" value={cfg.templateId} onChange={(e) => setCfg({ ...cfg, templateId: e.target.value })} className="px-3 py-2 rounded-xl border text-sm" />
-                    <input placeholder="Public Key" value={cfg.publicKey} onChange={(e) => setCfg({ ...cfg, publicKey: e.target.value })} className="px-3 py-2 rounded-xl border text-sm" />
-                    <input placeholder="Email phản hồi" value={cfg.adminEmail} onChange={(e) => setCfg({ ...cfg, adminEmail: e.target.value })} className="px-3 py-2 rounded-xl border text-sm" />
-                  </div>
-                  <button type="button" onClick={() => msg('Đã lưu cấu hình EmailJS')} className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-stone-900 text-white text-xs font-bold"><Send className="w-3.5 h-3.5" />Lưu Cấu Hình</button>
-                  <p className="text-xs text-stone-500 flex items-center gap-1"><Mail className="w-3.5 h-3.5 text-amber-700" />Biến EmailJS: to_name, to_email, order_id, order_items, total_amount, payment_method, shipping_address</p>
+                        <input placeholder="Service ID" value={cfg.serviceId} onChange={(e) => setCfg({ ...cfg, serviceId: e.target.value })} className="px-3 py-2 rounded-xl border text-sm" />
+                        <input placeholder="Template ID" value={cfg.templateId} onChange={(e) => setCfg({ ...cfg, templateId: e.target.value })} className="px-3 py-2 rounded-xl border text-sm" />
+                        <input placeholder="Public Key" value={cfg.publicKey} onChange={(e) => setCfg({ ...cfg, publicKey: e.target.value })} className="px-3 py-2 rounded-xl border text-sm" />
+                        <input placeholder="Email phản hồi" value={cfg.adminEmail} onChange={(e) => setCfg({ ...cfg, adminEmail: e.target.value })} className="px-3 py-2 rounded-xl border text-sm" />
+                      </div>
+                      <button type="button" onClick={() => msg('Đã lưu cấu hình EmailJS')} className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-stone-900 text-white text-xs font-bold"><Send className="w-3.5 h-3.5" />Lưu Cấu Hình</button>
+                      <p className="text-xs text-stone-500 flex items-center gap-1"><Mail className="w-3.5 h-3.5 text-amber-700" />Biến EmailJS: to_name, to_email, order_id, order_items, total_amount, payment_method, shipping_address</p>
+                    </div>
+                  )}
                 </div>
-              )}
+              </div>
             </div>
-          </div>
+          )}
         </div>
-      )}
-    </div>
-  );
-                  }
-                                                                                                               
+      );
+                }
+                  
