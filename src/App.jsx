@@ -1,4 +1,3 @@
-```react
 import React, { Component, useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import {
   Music,
