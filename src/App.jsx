@@ -220,12 +220,19 @@ export default function App() {
               ))}
             </div>
             {cart.length > 0 && (
-              <div className="p-5 border-t bg-stone-50">
-                <div className="flex justify-between mb-3 font-bold"><span>Tổng cộng</span><span>{vnd(totalAmt)}</span></div>
-                <button onClick={() => { setCartOpen(false); setDone(null); setPayOpen(true); }} className="w-full py-3 rounded-xl bg-stone-900 text-white text-sm font-semibold">Đặt hàng ngay</button>
-              </div>
-            )}
-          </div>
+  <div className="p-5 border-t bg-stone-50">
+    <div className="flex justify-between mb-3 font-bold">
+      <span>Tổng cộng</span>
+      <span>{vnd(totalAmt)}</span>
+    </div>
+    <button 
+      onClick={() => { setCartOpen(false); setDone(null); setPayOpen(true); }} 
+      className="w-full py-3 rounded-xl bg-stone-900 text-white text-sm font-semibold"
+    >
+      Đặt hàng ngay
+    </button>
+  </div>
+)}
         </div>
       )}
 
