@@ -40,6 +40,10 @@ const Icon = ({ name, className = "w-5 h-5", fill = "none" }) => {
     eye: <><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" /></>,
     eyeOff: <><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" /><line x1="1" y1="1" x2="23" y2="23" /></>,
     logOut: <><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><polyline points="16 17 21 12 16 7" /><line x1="21" y1="12" x2="9" y2="12" /></>,
+    bot: <><rect x="3" y="11" width="18" height="10" rx="2" /><circle cx="12" cy="5" r="2" /><path d="M12 7v4" /><line x1="8" y1="16" x2="8" y2="16" /><line x1="16" y1="16" x2="16" y2="16" /></>,
+    send: <><line x1="22" y1="2" x2="11" y2="13" /><polygon points="22 2 15 22 11 13 2 9 22 2" /></>,
+    sparkles: <><path d="M12 3l1.9 5.8a2 2 0 0 0 1.3 1.3L21 12l-5.8 1.9a2 2 0 0 0-1.3 1.3L12 21l-1.9-5.8a2 2 0 0 0-1.3-1.3L3 12l5.8-1.9a2 2 0 0 0 1.3-1.3L12 3z" /></>,
+    messageCircle: <><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" /></>,
   };
 
   return (
@@ -343,6 +347,10 @@ const DEFAULT_SETTINGS = {
   bannerImageUrl: '',
   adminUsername: 'admin',
   adminPassword: '123',
+  chatbotEnabled: true,
+  chatbotName: 'Trợ lý Melody AI',
+  chatbotWelcome: 'Xin chào! Mình là Trợ lý Melody AI. Bạn cần tìm nhạc cụ, tai nghe, loa hay tra cứu đơn hàng nào ạ?',
+  geminiApiKey: '',
 };
 
 const DEFAULT_ORDERS = [
@@ -499,6 +507,286 @@ const SmartProductImage = ({ src, alt, className = "" }) => {
 };
 
 // ==========================================
+// 6B. SMART CHATBOT ENGINE (Hội thoại thông minh & Hỏi đáp kiến thức + Kho hàng)
+// ==========================================
+const removeVietnameseTones = (str = '') => {
+  return String(str)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/đ/g, 'd')
+    .replace(/Đ/g, 'D')
+    .toLowerCase();
+};
+
+const extractPriceConstraints = (rawQuery) => {
+  const q = removeVietnameseTones(rawQuery);
+  let maxPrice = null;
+  let minPrice = null;
+
+  const underMatch = q.match(/(?:duoi|nho hon|it hon|khong qua|toi da|<=|<|tam|khoang)\s*(\d+(?:[.,]\d+)?)\s*(trieu|tr|cu|nghin|ngan|k)?/);
+  if (underMatch) {
+    const num = parseFloat(underMatch[1].replace(',', '.'));
+    const unit = underMatch[2] || (num < 100 ? 'trieu' : 'nghin');
+    if (['trieu', 'tr', 'cu'].includes(unit)) maxPrice = num * 1000000;
+    else if (['nghin', 'ngan', 'k'].includes(unit)) maxPrice = num * 1000;
+  }
+
+  const overMatch = q.match(/(?:tren|lon hon|hon|tu|toi thieu|>=|>)\s*(\d+(?:[.,]\d+)?)\s*(trieu|tr|cu|nghin|ngan|k)?/);
+  if (overMatch) {
+    const num = parseFloat(overMatch[1].replace(',', '.'));
+    const unit = overMatch[2] || (num < 100 ? 'trieu' : 'nghin');
+    if (['trieu', 'tr', 'cu'].includes(unit)) minPrice = num * 1000000;
+    else if (['nghin', 'ngan', 'k'].includes(unit)) minPrice = num * 1000;
+  }
+
+  return { minPrice, maxPrice };
+};
+
+const STOP_WORDS = new Set([
+  'cac', 'loai', 'nhung', 'san', 'pham', 'nao', 'duoi', 'tren', 'tu', 'den', 'gia', 'bao', 'nhieu',
+  'trieu', 'tr', 'nghin', 'ngan', 'k', 'dong', 'vnd', 'co', 'khong', 'cho', 'toi', 'minh', 'hoi',
+  'tim', 'mua', 'can', 'tu', 'van', 'giup', 'voi', 'la', 'gi', 'o', 'dau', 'cua', 'shop', 'hang',
+  'tot', 'nhat', 're', 'dat', 'tam', 'khoang', 'duoc', 'a', 'nhe', 'ban', 'em', 'anh', 'chi', 've',
+  'so', 'sanh', 'giua', 'va', 'hay', 'nen', 'chon', 'cai', 'chiec', 'bo', 'thong', 'so', 'chi', 'tiet'
+]);
+
+const generateSmartBotReply = (userText, { products, categories, orders, settings, lastMentionedProducts = [] }) => {
+  const raw = userText.trim();
+  const norm = removeVietnameseTones(raw);
+
+  // 1. Tra cứu mã đơn hàng (VD: MS-20261118-8421)
+  const orderCodeMatch = raw.match(/MS-[0-9]{8}-[0-9]{4}/i);
+  if (orderCodeMatch || (norm.includes('don hang') && (norm.includes('tra cuu') || norm.includes('kiem tra')))) {
+    if (orderCodeMatch) {
+      const code = orderCodeMatch[0].toUpperCase();
+      const foundOrder = orders.find((o) => o.id.toUpperCase() === code);
+      if (foundOrder) {
+        return {
+          text: `Thông tin đơn hàng **${foundOrder.id}**:\n• Khách hàng: ${foundOrder.customerName} (${foundOrder.phone})\n• Trạng thái: **${foundOrder.status}**\n• Tổng tiền: ${formatVND(foundOrder.totalAmount)}\n• Dự kiến giao: ${foundOrder.estimatedDelivery}`,
+          products: [],
+        };
+      }
+      return {
+        text: `Mình chưa tìm thấy mã đơn hàng **${code}** trong hệ thống. Bạn vui lòng kiểm tra lại mã đơn hoặc liên hệ Hotline **${settings.hotline}** để được hỗ trợ nhé!`,
+        products: [],
+      };
+    }
+    return {
+      text: 'Bạn vui lòng nhập chính xác mã đơn hàng (ví dụ: `MS-20261118-8421`) để mình kiểm tra trạng thái ngay cho bạn nhé!',
+      products: [],
+    };
+  }
+
+  // 2. Hỏi đáp kiến thức âm thanh, nhạc cụ, thông số kỹ thuật (dB, Watt, Hz, pin, bảo hành, cách chọn...)
+  const isSpecOrKnowledgeQuestion =
+    /(db|decibel|watt|cong suat|pin|bao lau|chong on|anc|ldac|hz|tan so|88 phim|pha-4|spruce|go van sam|bao hanh|doi tra|huong dan|cach chon|nguoi moi|bat dau)/.test(norm) ||
+    /(bao nhieu|cao nhat|lon nhat|nang bao nhieu|dung duoc|co tot khong|khac nhau|so sanh|la gi)/.test(norm);
+
+  if (isSpecOrKnowledgeQuestion) {
+    // 2a. Câu hỏi về độ ồn / âm lượng dB (decibel)
+    if (/(db|decibel|am luong|do on)/.test(norm)) {
+      const marshall = products.find((p) => removeVietnameseTones(p.name).includes('marshall'));
+      const rode = products.find((p) => removeVietnameseTones(p.name).includes('rode'));
+      const sony = products.find((p) => removeVietnameseTones(p.name).includes('sony'));
+
+      // Nếu khách vừa xem/hỏi một sản phẩm cụ thể trước đó
+      const recentProd = lastMentionedProducts[0];
+      if (recentProd && removeVietnameseTones(recentProd.name).includes('marshall')) {
+        return {
+          text: `**Loa Bluetooth Marshall Acton III** đạt mức áp suất âm thanh tối đa khoảng **95 dB @ 1m** (công suất tổng 60W: 1 loa trầm 30W + 2 loa tweeter 15W), đủ sức lấp đầy âm thanh sống động cho phòng 20–35m².`,
+          products: [recentProd],
+        };
+      }
+
+      let reply = `Về thông số **dB (Decibel)** trong âm thanh và các thiết bị tại **${settings.companyName}**:\n`;
+      reply += `• **Ngưỡng an toàn & tham chiếu:** Trò chuyện bình thường khoảng **60 dB**; nghe nhạc an toàn lâu dài dưới **85 dB**; ngưỡng gây đau tai từ **120 dB** trở lên.\n`;
+      if (marshall) reply += `• **${marshall.name}:** Mức âm lượng tối đa đạt **95 dB @ 1m** (công suất 60W).\n`;
+      if (rode) reply += `• **${rode.name}:** Độ ồn tự thân siêu thấp chỉ **4 dBA**, chịu áp suất âm tối đa (Max SPL) lên tới **142 dB**.\n`;
+      if (sony) reply += `• **${sony.name}:** Công nghệ chống ồn chủ động ANC giúp giảm tới **30–40 dB** tiếng ồn môi trường.\n`;
+      reply += `Bạn đang muốn hỏi thông số dB của thiết bị cụ thể nào ạ?`;
+
+      return {
+        text: reply,
+        products: recentProd ? [recentProd] : [],
+      };
+    }
+
+    // 2b. Câu hỏi về pin / thời lượng sử dụng
+    if (/(pin|sac|gio|thoi luong)/.test(norm)) {
+      const sony = products.find((p) => removeVietnameseTones(p.name).includes('sony'));
+      return {
+        text: sony
+          ? `**${sony.name}** có thời lượng pin lên tới **30 giờ** khi bật chống ồn ANC (và 40 giờ khi tắt ANC), hỗ trợ sạc nhanh 3 phút nghe được 3 giờ. Còn **Loa Marshall Acton III** dùng nguồn điện trực tiếp 100–240V cho công suất ổn định tối đa.`
+          : 'Các dòng tai nghe không dây tại cửa hàng có thời lượng pin từ 25–30 giờ sử dụng liên tục.',
+        products: sony ? [sony] : [],
+      };
+    }
+
+    // 2c. Câu hỏi về bảo hành / đổi trả
+    if (/(bao hanh|doi tra|sua chua|chinh hang)/.test(norm)) {
+      return {
+        text: `Chính sách bảo hành tại **${settings.companyName}**:\n• **100% hàng chính hãng**, bảo hành **12 – 24 tháng** theo tiêu chuẩn nhà sản xuất.\n• **1 đổi 1 trong 7 ngày** đầu nếu phát sinh lỗi kỹ thuật từ nhà sản xuất.\n• Hỗ trợ kỹ thuật trọn đời qua Hotline **${settings.hotline}**.`,
+        products: [],
+      };
+    }
+
+    // 2d. Tư vấn người mới tập chơi nhạc cụ (Guitar / Piano)
+    if (/(nguoi moi|moi tap|moi choi|bat dau|hoc dan)/.test(norm)) {
+      const instruments = products.filter((p) => removeVietnameseTones(p.category).includes('nhac cu'));
+      return {
+        text: `Với người mới bắt đầu tập nhạc cụ, mình gợi ý 2 lựa chọn rất dễ làm quen và bền bỉ tại **${settings.companyName}**:\n• **Đàn Guitar Acoustic Yamaha FG800:** Cần đàn êm tay, âm vang chuẩn, rất phù hợp để tự học đệm hát.\n• **Đàn Piano Điện Roland FP-30X:** 88 phím nặng mô phỏng đàn cơ, có cổng cắm tai nghe để luyện tập ban đêm không làm phiền xung quanh.`,
+        products: instruments,
+      };
+    }
+
+    // 2e. So sánh các sản phẩm
+    if (/(so sanh|khac nhau|chon cai nao)/.test(norm)) {
+      const targetProds = products.filter((p) => {
+        const pNorm = removeVietnameseTones(p.name);
+        return norm.split(/\s+/).some((w) => w.length >= 3 && !STOP_WORDS.has(w) && pNorm.includes(w));
+      });
+      if (targetProds.length >= 2) {
+        const lines = targetProds
+          .slice(0, 3)
+          .map((p) => `• **${p.name}** (${formatVND(p.price)}): ${p.description}`)
+          .join('\n');
+        return {
+          text: `Dưới đây là điểm khác biệt chính giữa các sản phẩm bạn quan tâm:\n${lines}\n\nBạn ưu tiên nhu cầu di chuyển cá nhân hay nghe/chơi cố định tại phòng để mình chốt mẫu tối ưu nhất nhé?`,
+          products: targetProds.slice(0, 3),
+        };
+      }
+    }
+  }
+
+  // 3. Hỏi về giao hàng, thanh toán, địa chỉ, liên hệ
+  if (
+    (norm.includes('giao hang') || norm.includes('van chuyen') || norm.includes('thanh toan') || norm.includes('ship') || norm.includes('cod') || norm.includes('chuyen khoan')) &&
+    !norm.includes('tai nghe') && !norm.includes('loa') && !norm.includes('dan') && !norm.includes('micro')
+  ) {
+    return {
+      text: `Chính sách giao hàng & thanh toán tại **${settings.companyName}**:\n• **Thanh toán:** Tiền mặt khi nhận hàng (COD) hoặc Chuyển khoản ngân hàng (${settings.bankName} - STK: ${settings.bankAccountNumber}).\n• **Giao hàng:** Toàn quốc từ 2 – 4 ngày làm việc.\n• **Hỗ trợ:** Hotline ${settings.hotline} | Email: ${settings.supportEmail}.`,
+      products: [],
+    };
+  }
+
+  if (norm.includes('dia chi') || norm.includes('lien he') || norm.includes('hotline') || norm.includes('cua hang o dau') || norm.includes('gio mo cua')) {
+    return {
+      text: `Thông tin liên hệ **${settings.companyName}**:\n• **Địa chỉ:** ${settings.companyAddress}\n• **Giờ mở cửa:** 08:30 – 21:30 (Tất cả các ngày trong tuần)\n• **Hotline:** ${settings.hotline}\n• **Email CSKH:** ${settings.supportEmail}`,
+      products: [],
+    };
+  }
+
+  // 4. Phân tích từ khóa sản phẩm & khoảng giá
+  const { minPrice, maxPrice } = extractPriceConstraints(raw);
+
+  const keywords = norm
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter((w) => w.length >= 2 && !STOP_WORDS.has(w) && !/^\d+$/.test(w));
+
+  const expandedKeywords = [...keywords];
+  if (keywords.includes('guitar') || keywords.includes('ghita')) expandedKeywords.push('guitar', 'dan');
+  if (keywords.includes('piano')) expandedKeywords.push('piano', 'dan');
+  if (keywords.includes('mic')) expandedKeywords.push('micro');
+  if (keywords.includes('headphone')) expandedKeywords.push('tai', 'nghe');
+  if (keywords.includes('speaker')) expandedKeywords.push('loa');
+
+  // Kiểm tra các nhạc cụ / thiết bị KHÔNG kinh doanh để trả lời ngay, chính xác
+  const unavailableItems = [
+    { keys: ['violin', 'vi cam'], label: 'đàn Violin' },
+    { keys: ['trong', 'drum'], label: 'bộ Trống (Drum)' },
+    { keys: ['saxophone', 'ken'], label: 'kèn Saxophone' },
+    { keys: ['organ'], label: 'đàn Organ' },
+    { keys: ['ukulele'], label: 'đàn Ukulele' },
+    { keys: ['cello'], label: 'đàn Cello' },
+    { keys: ['sao', 'flute'], label: 'sáo trúc / Flute' },
+  ];
+  const matchedUnavailable = unavailableItems.find((item) =>
+    item.keys.some((k) => new RegExp(`(^|\\s)${k}(\\s|$)`).test(norm))
+  );
+  if (matchedUnavailable) {
+    const availableCats = categories.map((c) => c.name).join(', ');
+    return {
+      text: `Xin lỗi bạn, hiện tại **${settings.companyName}** chưa kinh doanh **${matchedUnavailable.label}** trong kho hàng.\n\nHiện cửa hàng đang có sẵn các sản phẩm thuộc danh mục **${availableCats}** (như đàn Guitar Acoustic Yamaha, đàn Piano điện Roland, tai nghe Sony, loa Marshall, micro thu âm Rode). Bạn có muốn xem thử các sản phẩm này không ạ?`,
+      products: [],
+    };
+  }
+
+  // Chấm điểm mức độ khớp thực sự cho từng sản phẩm
+  const scoredProducts = products.map((p) => {
+    const pName = removeVietnameseTones(p.name);
+    const pCat = removeVietnameseTones(p.category);
+    const pDesc = removeVietnameseTones(p.description);
+    let score = 0;
+
+    for (const kw of expandedKeywords) {
+      const wordRegex = new RegExp(`(^|\\s)${kw}(\\s|$)`);
+      if (wordRegex.test(pName)) score += 10;
+      else if (pName.includes(kw)) score += 6;
+
+      if (wordRegex.test(pCat)) score += 7;
+      else if (pCat.includes(kw)) score += 4;
+
+      if (wordRegex.test(pDesc)) score += 3;
+    }
+
+    return { product: p, score };
+  });
+
+  let candidates = [];
+  if (keywords.length > 0) {
+    candidates = scoredProducts.filter((item) => item.score > 0).map((item) => item.product);
+  } else if (minPrice !== null || maxPrice !== null) {
+    candidates = [...products];
+  } else if (norm.includes('tat ca') || norm.includes('san pham') || norm.includes('danh muc') || norm.includes('co gi') || norm.includes('ban gi')) {
+    const catList = categories.map((c) => c.name).join(', ');
+    return {
+      text: `Hiện tại **${settings.companyName}** đang phân phối **${products.length} sản phẩm** chính hãng thuộc các danh mục: **${catList}**. Dưới đây là một số sản phẩm nổi bật:`,
+      products: products.slice(0, 3),
+    };
+  } else if (['xin chao', 'hello', 'hi', 'chao', 'alo', 'cam on', 'thanks', 'ok'].some((g) => norm === g || norm.startsWith(g + ' '))) {
+    if (norm.includes('cam on') || norm.includes('thanks')) {
+      return {
+        text: `Rất vui được hỗ trợ bạn! Nếu cần tư vấn thêm về thông số kỹ thuật, giá bán hay đặt hàng tại **${settings.companyName}**, cứ nhắn cho mình bất cứ lúc nào nhé.`,
+        products: [],
+      };
+    }
+    return {
+      text: `Chào bạn! Mình là **${settings.chatbotName || 'Trợ lý Melody AI'}**. Mình có thể giúp bạn tìm sản phẩm, giải đáp thông số kỹ thuật (dB, công suất, pin...), hoặc tra cứu đơn hàng. Bạn cần hỗ trợ gì ạ?`,
+      products: [],
+    };
+  }
+
+  if (candidates.length > 0) {
+    if (maxPrice !== null) candidates = candidates.filter((p) => p.price <= maxPrice);
+    if (minPrice !== null) candidates = candidates.filter((p) => p.price >= minPrice);
+  }
+
+  if (candidates.length > 0) {
+    const priceNote =
+      maxPrice !== null && minPrice !== null
+        ? ` trong tầm giá ${formatVND(minPrice)} – ${formatVND(maxPrice)}`
+        : maxPrice !== null
+        ? ` có giá dưới ${formatVND(maxPrice)}`
+        : minPrice !== null
+        ? ` có giá từ ${formatVND(minPrice)}`
+        : '';
+
+    return {
+      text: `Mình tìm thấy **${candidates.length} sản phẩm**${priceNote} phù hợp tại **${settings.companyName}**:`,
+      products: candidates.slice(0, 4),
+    };
+  }
+
+  // Fallback thông minh: Không gán ghép từ khóa câu hỏi thành tên sản phẩm bị thiếu
+  const availableCats = categories.map((c) => c.name).join(', ');
+  return {
+    text: `Mình chưa tìm thấy sản phẩm cụ thể nào khớp với câu hỏi **"${raw}"** trong danh mục hiện có của **${settings.companyName}**.\n\nHiện cửa hàng đang kinh doanh các nhóm sản phẩm: **${availableCats}**. Bạn có thể hỏi mình về giá bán, thông số kỹ thuật (âm lượng dB, công suất, thời lượng pin), chính sách bảo hành/giao hàng hoặc nhập mã đơn hàng (\`MS-...\`) để mình hỗ trợ chi tiết nhé!`,
+    products: [],
+  };
+};
+
+// ==========================================
 // 7. MAIN APPLICATION
 // ==========================================
 function MelodyStoreMain() {
@@ -558,6 +846,7 @@ function MelodyStoreMain() {
   const [showAdminPass, setShowAdminPass] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState('Tất cả');
   const [searchQuery, setSearchQuery] = useState('');
+  const [sortOption, setSortOption] = useState('featured');
   const [toastMsg, setToastMsg] = useState(null);
 
   // Modals & Drawers
@@ -566,7 +855,29 @@ function MelodyStoreMain() {
   const [zoomLevel, setZoomLevel] = useState(1);
   const [isCartOpen, setIsCartOpen] = useState(false);
   const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
+  const [directBuyItem, setDirectBuyItem] = useState(null);
   const [confirmedOrderEmail, setConfirmedOrderEmail] = useState(null);
+
+  // Chatbot State
+  const [isChatOpen, setIsChatOpen] = useState(false);
+  const [chatInput, setChatInput] = useState('');
+  const [isBotTyping, setIsBotTyping] = useState(false);
+  const [chatMessages, setChatMessages] = useState(() => [
+    {
+      id: 'welcome-msg',
+      sender: 'bot',
+      text: settings.chatbotWelcome || DEFAULT_SETTINGS.chatbotWelcome,
+      products: [],
+      time: new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }),
+    },
+  ]);
+  const chatEndRef = useRef(null);
+
+  useEffect(() => {
+    if (isChatOpen && chatEndRef.current) {
+      chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [chatMessages, isChatOpen, isBotTyping]);
 
   // Checkout Form State
   const [checkoutForm, setCheckoutForm] = useState({
@@ -603,6 +914,83 @@ function MelodyStoreMain() {
   const showToast = (message, type = 'success') => {
     setToastMsg({ message, type });
     setTimeout(() => setToastMsg(null), 3200);
+  };
+
+  const handleSendChatMessage = async (customText) => {
+    const text = (typeof customText === 'string' ? customText : chatInput).trim();
+    if (!text || isBotTyping) return;
+
+    const nowTime = new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+    const userMsg = { id: `u-${Date.now()}`, sender: 'user', text, products: [], time: nowTime };
+    setChatMessages((prev) => [...prev, userMsg]);
+    if (typeof customText !== 'string') setChatInput('');
+    setIsBotTyping(true);
+
+    // Luôn chạy bộ phân tích cục bộ chính xác dựa trên kho hàng thực tế trước
+    const lastBotWithProds = [...chatMessages].reverse().find((m) => m.sender === 'bot' && m.products && m.products.length > 0);
+    const localReply = generateSmartBotReply(text, {
+      products,
+      categories,
+      orders,
+      settings,
+      lastMentionedProducts: lastBotWithProds ? lastBotWithProds.products : [],
+    });
+
+    // Nếu Admin có cấu hình Gemini API Key, gọi Gemini kèm danh sách sản phẩm thật để diễn đạt tự nhiên hơn
+    if (settings.geminiApiKey && settings.geminiApiKey.trim().length > 10) {
+      try {
+        const catalogContext = products
+          .map((p) => `- [ID:${p.id}] ${p.name} | Danh mục: ${p.category} | Giá: ${formatVND(p.price)} | Kho: ${p.stock}`)
+          .join('\n');
+        const prompt = `Bạn là ${settings.chatbotName || 'Trợ lý Melody AI'} của cửa hàng ${settings.companyName}.
+Chỉ được tư vấn dựa trên danh sách sản phẩm thực tế sau đây (TUYỆT ĐỐI KHÔNG bịa ra sản phẩm không có trong danh sách):
+${catalogContext}
+
+Nếu khách hỏi sản phẩm KHÔNG CÓ trong danh sách trên (ví dụ violin, trống, kèn...), hãy xin lỗi lịch sự, báo rõ cửa hàng chưa kinh doanh mặt hàng đó và gợi ý các danh mục hiện có (${categories.map((c) => c.name).join(', ')}).
+Trả lời ngắn gọn, thân thiện bằng tiếng Việt cho câu hỏi: "${text}"`;
+
+        const res = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(settings.geminiApiKey.trim())}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
+          }
+        );
+        if (res.ok) {
+          const data = await res.json();
+          const aiText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+          if (aiText) {
+            setChatMessages((prev) => [
+              ...prev,
+              {
+                id: `b-${Date.now()}`,
+                sender: 'bot',
+                text: aiText.trim(),
+                products: localReply.products,
+                time: new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }),
+              },
+            ]);
+            setIsBotTyping(false);
+            return;
+          }
+        }
+      } catch (e) {}
+    }
+
+    setTimeout(() => {
+      setChatMessages((prev) => [
+        ...prev,
+        {
+          id: `b-${Date.now()}`,
+          sender: 'bot',
+          text: localReply.text,
+          products: localReply.products,
+          time: new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }),
+        },
+      ]);
+      setIsBotTyping(false);
+    }, 350);
   };
 
   // Xác thực đăng nhập trang quản trị Admin
@@ -753,7 +1141,19 @@ function MelodyStoreMain() {
     return errs;
   }, [checkoutForm]);
 
-  const isCheckoutValid = Object.keys(checkoutErrors).length === 0 && cartDetails.length > 0;
+  const checkoutItems = useMemo(() => {
+    if (directBuyItem && directBuyItem.product) {
+      const latestProd = products.find((p) => p.id === directBuyItem.product.id) || directBuyItem.product;
+      const qty = Math.min(Math.max(1, directBuyItem.quantity || 1), Math.max(1, latestProd.stock));
+      return [{ product: latestProd, quantity: qty, subtotal: latestProd.price * qty }];
+    }
+    return cartDetails;
+  }, [directBuyItem, products, cartDetails]);
+
+  const checkoutTotalItems = useMemo(() => checkoutItems.reduce((sum, i) => sum + i.quantity, 0), [checkoutItems]);
+  const checkoutTotalAmount = useMemo(() => checkoutItems.reduce((sum, i) => sum + i.subtotal, 0), [checkoutItems]);
+
+  const isCheckoutValid = Object.keys(checkoutErrors).length === 0 && checkoutItems.length > 0;
 
   const handleConfirmOrder = (e) => {
     e.preventDefault();
@@ -778,13 +1178,13 @@ function MelodyStoreMain() {
       email: checkoutForm.email.trim(),
       address: checkoutForm.address.trim(),
       paymentMethod: checkoutForm.paymentMethod,
-      items: cartDetails.map((c) => ({
+      items: checkoutItems.map((c) => ({
         id: c.product.id,
         name: c.product.name,
         price: c.product.price,
         quantity: c.quantity,
       })),
-      totalAmount: totalCartAmount,
+      totalAmount: checkoutTotalAmount,
       status: 'Chờ xác nhận',
       createdAt: formattedOrderDate,
       estimatedDelivery: formattedDeliveryDate,
@@ -794,14 +1194,17 @@ function MelodyStoreMain() {
     setOrders((prev) => [newOrder, ...prev]);
     setProducts((prev) =>
       prev.map((p) => {
-        const bought = cartDetails.find((c) => c.product.id === p.id);
+        const bought = checkoutItems.find((c) => c.product.id === p.id);
         if (!bought) return p;
         return { ...p, stock: Math.max(0, p.stock - bought.quantity) };
       })
     );
-    // Làm sạch giỏ hàng & yêu thích của phiên hiện tại sau khi đặt hàng thành công
-    setCart([]);
-    setFavorites([]);
+    // Nếu đặt từ giỏ hàng thì làm sạch giỏ hàng; nếu mua trực tiếp thì giữ nguyên giỏ hàng hiện tại
+    if (!directBuyItem) {
+      setCart([]);
+      setFavorites([]);
+    }
+    setDirectBuyItem(null);
     setIsCheckoutOpen(false);
     setIsCartOpen(false);
     setCheckoutForm({ customerName: '', phone: '', address: '', email: '', paymentMethod: '' });
@@ -809,16 +1212,23 @@ function MelodyStoreMain() {
     showToast(`Đặt hàng thành công! Mã đơn ${orderId}`, 'success');
   };
 
-  // Filtered Storefront Products
+  // Filtered & Sorted Storefront Products
   const filteredProducts = useMemo(() => {
-    return products.filter((p) => {
+    let result = products.filter((p) => {
       const matchCat = selectedCategory === 'Tất cả' || p.category === selectedCategory;
       const matchSearch =
         p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
         p.description.toLowerCase().includes(searchQuery.toLowerCase());
       return matchCat && matchSearch;
     });
-  }, [products, selectedCategory, searchQuery]);
+
+    if (sortOption === 'price_asc') {
+      result.sort((a, b) => a.price - b.price);
+    } else if (sortOption === 'price_desc') {
+      result.sort((a, b) => b.price - a.price);
+    }
+    return result;
+  }, [products, selectedCategory, searchQuery, sortOption]);
 
   // ==========================================
   // ADMIN STATE & HANDLERS
@@ -1026,15 +1436,15 @@ function MelodyStoreMain() {
       {/* ==========================================
           HEADER
       ========================================== */}
-      <header className="sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b border-slate-200/80 shadow-sm">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-3">
+      <header className="fixed top-0 left-0 right-0 z-50 bg-white/95 backdrop-blur-md border-b border-slate-200/80 shadow-sm">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-2.5 flex flex-wrap items-center justify-between gap-3 min-h-[64px]">
           {/* Logo */}
           <button
             onClick={() => {
               setViewMode('store');
               setSelectedCategory('Tất cả');
             }}
-            className="flex items-center gap-2.5 text-left group"
+            className="flex items-center gap-2.5 text-left group shrink-0"
           >
             <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-600 to-purple-600 text-white flex items-center justify-center shadow-md group-hover:scale-105 transition">
               <Icon name="music" className="w-5 h-5" />
@@ -1051,34 +1461,21 @@ function MelodyStoreMain() {
 
           {/* Search bar on Storefront */}
           {viewMode === 'store' && (
-            <div className="hidden md:flex items-center flex-1 max-w-md mx-4 relative">
-              <Icon name="search" className="w-4 h-4 text-slate-400 absolute left-3.5" />
+            <div className="order-last w-full md:order-none md:flex-1 md:max-w-md mx-0 md:mx-4 relative">
+              <Icon name="search" className="w-4 h-4 text-slate-400 absolute left-3.5 top-[9px]" />
               <input
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Tìm kiếm tai nghe, loa, đàn guitar, micro..."
-                className="w-full pl-10 pr-4 py-2 bg-slate-100 border border-transparent focus:border-indigo-400 focus:bg-white rounded-full text-sm outline-none transition"
+                placeholder="Tìm kiếm tai nghe, loa, đàn guitar..."
+                className="w-full pl-10 pr-4 py-2 bg-slate-100/80 border border-slate-200/60 focus:border-indigo-400 focus:bg-white rounded-full text-sm outline-none transition shadow-inner"
               />
             </div>
           )}
 
           {/* Right Actions */}
-          <div className="flex items-center gap-2 sm:gap-3">
-            {settings.bgMusicEnabled && (
-              <button
-                onClick={toggleMusic}
-                title={musicPlaying ? 'Tắt nhạc nền' : 'Bật nhạc nền thư giãn'}
-                className={`p-2.5 rounded-full border text-xs font-medium flex items-center gap-1.5 transition ${
-                  musicPlaying
-                    ? 'bg-indigo-50 border-indigo-200 text-indigo-700'
-                    : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
-                }`}
-              >
-                <Icon name={musicPlaying ? 'volume2' : 'volumeX'} className="w-4 h-4" />
-                <span className="hidden lg:inline">{musicPlaying ? 'Đang phát nhạc' : 'Nhạc nền'}</span>
-              </button>
-            )}
+          <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+
 
             {viewMode === 'admin' && isAdminAuthenticated ? (
               <div className="flex items-center gap-2">
@@ -1118,7 +1515,7 @@ function MelodyStoreMain() {
           STOREFRONT VIEW
       ========================================== */}
       {viewMode === 'store' && (
-        <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 py-6 sm:py-8 space-y-8">
+        <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 py-6 sm:py-8 space-y-8 mt-[110px] md:mt-16">
           {/* HERO BANNER */}
           <section
             className={`relative rounded-3xl overflow-hidden shadow-xl bg-gradient-to-br ${settings.bannerGradient} text-white p-7 sm:p-12`}
@@ -1155,51 +1552,56 @@ function MelodyStoreMain() {
             </div>
           </section>
 
-          {/* MOBILE SEARCH & CATEGORY FILTER */}
+          {/* CATEGORY FILTER & SORTING */}
           <section id="product-catalog" className="space-y-4">
-            <div className="md:hidden relative">
-              <Icon name="search" className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Tìm kiếm sản phẩm..."
-                className="w-full pl-10 pr-4 py-2.5 bg-white border border-slate-200 rounded-xl text-sm outline-none focus:border-indigo-500"
-              />
+            {/* Dòng 1: Danh mục */}
+            <div className="flex items-center gap-2 overflow-x-auto pb-3 w-full hide-scrollbar border-b border-slate-200/60">
+              <button
+                onClick={() => setSelectedCategory('Tất cả')}
+                className={`px-4 py-2 rounded-full text-sm font-semibold whitespace-nowrap transition ${
+                  selectedCategory === 'Tất cả'
+                    ? 'bg-indigo-600 text-white shadow-sm'
+                    : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-100'
+                }`}
+              >
+                Tất cả ({products.length})
+              </button>
+              {categories.map((cat) => {
+                const count = products.filter((p) => p.category === cat.name).length;
+                return (
+                  <button
+                    key={cat.id}
+                    onClick={() => setSelectedCategory(cat.name)}
+                    className={`px-4 py-2 rounded-full text-sm font-semibold whitespace-nowrap transition ${
+                      selectedCategory === cat.name
+                        ? 'bg-indigo-600 text-white shadow-sm'
+                        : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-100'
+                    }`}
+                  >
+                    {cat.name} ({count})
+                  </button>
+                );
+              })}
             </div>
-
-            <div className="flex items-center justify-between flex-wrap gap-3">
-              <div className="flex items-center gap-2 overflow-x-auto pb-1 w-full sm:w-auto">
-                <button
-                  onClick={() => setSelectedCategory('Tất cả')}
-                  className={`px-4 py-2 rounded-full text-sm font-semibold whitespace-nowrap transition ${
-                    selectedCategory === 'Tất cả'
-                      ? 'bg-indigo-600 text-white shadow-sm'
-                      : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-100'
-                  }`}
-                >
-                  Tất cả ({products.length})
-                </button>
-                {categories.map((cat) => {
-                  const count = products.filter((p) => p.category === cat.name).length;
-                  return (
-                    <button
-                      key={cat.id}
-                      onClick={() => setSelectedCategory(cat.name)}
-                      className={`px-4 py-2 rounded-full text-sm font-semibold whitespace-nowrap transition ${
-                        selectedCategory === cat.name
-                          ? 'bg-indigo-600 text-white shadow-sm'
-                          : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-100'
-                      }`}
-                    >
-                      {cat.name} ({count})
-                    </button>
-                  );
-                })}
-              </div>
-              <span className="text-xs text-slate-500">
+            
+            {/* Dòng 2: Hiển thị & Sắp xếp */}
+            <div className="flex items-center justify-between w-full gap-4 pt-1">
+              <span className="text-xs text-slate-500 whitespace-nowrap">
                 Hiển thị <strong>{filteredProducts.length}</strong> sản phẩm
               </span>
+              
+              <div className="flex items-center gap-2 shrink-0">
+                <span className="text-xs font-semibold text-slate-600">Sắp xếp:</span>
+                <select
+                  value={sortOption}
+                  onChange={(e) => setSortOption(e.target.value)}
+                  className="px-3 py-1.5 rounded-xl border border-slate-200 bg-white text-slate-700 text-xs font-medium outline-none focus:border-indigo-500 shadow-sm cursor-pointer"
+                >
+                  <option value="featured">Nổi bật nhất</option>
+                  <option value="price_asc">Giá: Thấp đến Cao</option>
+                  <option value="price_desc">Giá: Cao đến Thấp</option>
+                </select>
+              </div>
             </div>
           </section>
 
@@ -1277,7 +1679,7 @@ function MelodyStoreMain() {
                           disabled={product.stock <= 0}
                           onClick={(e) => {
                             e.stopPropagation();
-                            addToCart(product, 1);
+                            setDirectBuyItem({ product, quantity: 1 });
                             setIsCheckoutOpen(true);
                           }}
                           className="px-3.5 py-2 rounded-xl bg-slate-900 text-white text-xs font-semibold hover:bg-indigo-600 disabled:bg-slate-300 transition flex items-center gap-1.5"
@@ -1299,7 +1701,7 @@ function MelodyStoreMain() {
           ADMIN DASHBOARD VIEW
       ========================================== */}
       {viewMode === 'admin' && isAdminAuthenticated && (
-        <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 py-6 sm:py-8 space-y-6">
+        <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 py-6 sm:py-8 space-y-6 mt-[110px] md:mt-16">
           <div className="bg-white rounded-2xl border border-slate-200 p-5 sm:p-6 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div>
               <h1 className="text-2xl font-extrabold text-slate-900">Bảng Quản Trị Admin</h1>
@@ -1806,6 +2208,54 @@ function MelodyStoreMain() {
                   </div>
                 </div>
 
+                <div className="pt-3 space-y-3 border-t border-slate-100">
+                  <div className="flex items-center justify-between">
+                    <div className="text-xs font-bold text-slate-800 uppercase tracking-wide flex items-center gap-1.5">
+                      <Icon name="bot" className="w-3.5 h-3.5 text-indigo-600" />
+                      <span>Cấu hình Chatbot Tư vấn AI</span>
+                    </div>
+                    <label className="flex items-center gap-2 cursor-pointer text-xs font-semibold text-indigo-600">
+                      <input
+                        type="checkbox"
+                        checked={settings.chatbotEnabled ?? true}
+                        onChange={(e) => setSettings({ ...settings, chatbotEnabled: e.target.checked })}
+                        className="w-4 h-4 accent-indigo-600"
+                      />
+                      <span>Bật Chatbot</span>
+                    </label>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-600 mb-1">Tên Trợ lý Chatbot</label>
+                      <input
+                        type="text"
+                        value={settings.chatbotName ?? 'Trợ lý Melody AI'}
+                        onChange={(e) => setSettings({ ...settings, chatbotName: e.target.value })}
+                        className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-600 mb-1">Gemini API Key (Tùy chọn)</label>
+                      <input
+                        type="password"
+                        value={settings.geminiApiKey ?? ''}
+                        onChange={(e) => setSettings({ ...settings, geminiApiKey: e.target.value })}
+                        placeholder="AIzaSy... (Để trống dùng AI nội bộ)"
+                        className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm"
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-600 mb-1">Lời chào mở đầu Chatbot</label>
+                    <input
+                      type="text"
+                      value={settings.chatbotWelcome ?? DEFAULT_SETTINGS.chatbotWelcome}
+                      onChange={(e) => setSettings({ ...settings, chatbotWelcome: e.target.value })}
+                      className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm"
+                    />
+                  </div>
+                </div>
+
                 <div className="pt-2 space-y-2.5 border-t border-slate-100">
                   <label className="flex items-center justify-between cursor-pointer">
                     <span className="text-sm font-medium text-slate-700">Hiệu ứng nốt nhạc rơi 5 giây khi vào web</span>
@@ -1861,10 +2311,10 @@ function MelodyStoreMain() {
             <p>Email CSKH: {settings.supportEmail}</p>
           </div>
           <div className="space-y-1.5 text-xs text-slate-400">
-            <div className="text-white font-bold text-sm mb-2">Thanh toán & Giao hàng</div>
-            <p>Thanh toán tiền mặt khi nhận hàng (COD)</p>
-            <p>Chuyển khoản ngân hàng {settings.bankName}</p>
-            <p>Giao hàng toàn quốc từ 2 – 4 ngày làm việc</p>
+            <div className="text-white font-bold text-sm mb-2">Chính sách Giao hàng</div>
+            <p>Giao hàng hỏa tốc toàn quốc</p>
+            <p>Kiểm tra hàng trước khi thanh toán</p>
+            <p>Thời gian giao hàng từ 2 – 4 ngày làm việc</p>
           </div>
         </div>
 
@@ -1988,13 +2438,14 @@ function MelodyStoreMain() {
                   type="button"
                   disabled={activeProduct.stock <= 0}
                   onClick={() => {
-                    addToCart(activeProduct, 1);
+                    const target = activeProduct;
                     setActiveProduct(null);
-                    setIsCartOpen(true);
+                    setDirectBuyItem({ product: target, quantity: 1 });
+                    setIsCheckoutOpen(true);
                   }}
                   className="flex-1 py-3 rounded-xl bg-indigo-600 text-white font-bold text-sm hover:bg-indigo-700 disabled:bg-slate-300 transition"
                 >
-                  Thêm vào giỏ & Mua ngay
+                  Mua ngay
                 </button>
               </div>
             </div>
@@ -2014,23 +2465,7 @@ function MelodyStoreMain() {
                   <Icon name="cart" className="w-5 h-5 text-indigo-600" />
                   <h2 className="font-extrabold text-lg text-slate-900">Giỏ hàng của bạn ({totalCartItems})</h2>
                 </div>
-                <div className="flex items-center gap-2 mt-1">
-                  <span className="text-[11px] text-slate-400 flex items-center gap-1">
-                    <Icon name="user" className="w-3 h-3" />
-                    Phiên riêng: {sessionId.slice(0, 12)}
-                  </span>
-                  {cartDetails.length > 0 && (
-                    <button
-                      type="button"
-                      onClick={handleNewCustomerSession}
-                      title="Làm mới giỏ hàng cho khách hàng khác"
-                      className="text-[11px] text-indigo-600 hover:underline flex items-center gap-0.5 font-medium"
-                    >
-                      <Icon name="refresh" className="w-3 h-3" />
-                      <span>Khách mới</span>
-                    </button>
-                  )}
-                </div>
+
               </div>
               <button onClick={() => setIsCartOpen(false)} className="p-2 rounded-full hover:bg-slate-100">
                 <Icon name="x" className="w-5 h-5" />
@@ -2102,7 +2537,10 @@ function MelodyStoreMain() {
                 </div>
                 <button
                   type="button"
-                  onClick={() => setIsCheckoutOpen(true)}
+                  onClick={() => {
+                    setDirectBuyItem(null);
+                    setIsCheckoutOpen(true);
+                  }}
                   className="w-full py-3.5 rounded-xl bg-indigo-600 text-white font-extrabold text-sm hover:bg-indigo-700 transition shadow-lg"
                 >
                   MUA HÀNG
@@ -2126,11 +2564,30 @@ function MelodyStoreMain() {
               <h2 className="text-xl font-extrabold text-slate-900">Thông tin Đặt hàng</h2>
               <button
                 type="button"
-                onClick={() => setIsCheckoutOpen(false)}
+                onClick={() => {
+                  setIsCheckoutOpen(false);
+                  setDirectBuyItem(null);
+                }}
                 className="p-2 rounded-full hover:bg-slate-100"
               >
                 <Icon name="x" className="w-5 h-5" />
               </button>
+            </div>
+
+            {/* Tóm tắt sản phẩm đang đặt */}
+            <div className="bg-slate-50 border border-slate-200/80 rounded-2xl p-3 space-y-2">
+              {checkoutItems.map(({ product, quantity, subtotal }) => (
+                <div key={product.id} className="flex items-center justify-between gap-2 text-xs">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <SmartProductImage src={product.images?.[0]} alt={product.name} className="w-10 h-10 rounded-lg object-cover shrink-0 border border-slate-200" />
+                    <div className="min-w-0">
+                      <div className="font-bold text-slate-800 truncate">{product.name}</div>
+                      <div className="text-slate-500">Số lượng: {quantity} × {formatVND(product.price)}</div>
+                    </div>
+                  </div>
+                  <div className="font-bold text-indigo-600 shrink-0">{formatVND(subtotal)}</div>
+                </div>
+              ))}
             </div>
 
             <div className="space-y-3.5">
@@ -2237,7 +2694,7 @@ function MelodyStoreMain() {
                     <p>Ngân hàng: <strong>{settings.bankName}</strong></p>
                     <p>Số tài khoản: <strong>{settings.bankAccountNumber}</strong></p>
                     <p>Chủ tài khoản: <strong>{settings.bankAccountName}</strong></p>
-                    <p>Số tiền: <strong className="text-indigo-700">{formatVND(totalCartAmount)}</strong></p>
+                    <p>Số tiền: <strong className="text-indigo-700">{formatVND(checkoutTotalAmount)}</strong></p>
                   </div>
                 )}
               </div>
@@ -2245,8 +2702,8 @@ function MelodyStoreMain() {
 
             <div className="pt-3 border-t border-slate-100 space-y-3">
               <div className="flex justify-between text-sm font-bold">
-                <span>Tổng cộng ({totalCartItems} sản phẩm):</span>
-                <span className="text-indigo-600 text-lg">{formatVND(totalCartAmount)}</span>
+                <span>Tổng cộng ({checkoutTotalItems} sản phẩm):</span>
+                <span className="text-indigo-600 text-lg">{formatVND(checkoutTotalAmount)}</span>
               </div>
 
               <button
@@ -2599,6 +3056,204 @@ function MelodyStoreMain() {
             </div>
           </form>
         </div>
+      )}
+
+      {/* ==========================================
+          WIDGET 7: CHATBOT TƯ VẤN BÁN HÀNG THÔNG MINH
+      ========================================== */}
+      {(settings.chatbotEnabled ?? true) && viewMode === 'store' && (
+        <>
+          {/* Khung cửa sổ Chat */}
+          {isChatOpen && (
+            <div className="fixed bottom-20 right-4 sm:right-6 z-50 w-[calc(100vw-2rem)] sm:w-[390px] bg-white rounded-3xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[76vh]">
+              {/* Header Chatbot */}
+              <div className="bg-gradient-to-r from-indigo-600 via-purple-600 to-indigo-700 text-white px-4 py-3.5 flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-9 h-9 rounded-2xl bg-white/20 backdrop-blur-sm flex items-center justify-center">
+                    <Icon name="bot" className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <div className="font-bold text-sm flex items-center gap-1.5">
+                      <span>{settings.chatbotName || 'Trợ lý Melody AI'}</span>
+                      <Icon name="sparkles" className="w-3.5 h-3.5 text-amber-300" />
+                    </div>
+                    <div className="text-[11px] text-indigo-100 flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-emerald-400 inline-block" />
+                      <span>Tư vấn trực tuyến 24/7</span>
+                    </div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setChatMessages([
+                        {
+                          id: `reset-${Date.now()}`,
+                          sender: 'bot',
+                          text: settings.chatbotWelcome || DEFAULT_SETTINGS.chatbotWelcome,
+                          products: [],
+                          time: new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }),
+                        },
+                      ])
+                    }
+                    title="Làm mới cuộc trò chuyện"
+                    className="p-1.5 rounded-full hover:bg-white/15 transition"
+                  >
+                    <Icon name="refresh" className="w-4 h-4" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setIsChatOpen(false)}
+                    className="p-1.5 rounded-full hover:bg-white/15 transition"
+                  >
+                    <Icon name="x" className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Nội dung tin nhắn */}
+              <div className="flex-1 overflow-y-auto p-4 space-y-3.5 bg-slate-50/70">
+                {chatMessages.map((msg) => (
+                  <div key={msg.id} className="space-y-1">
+                    <div className={`flex ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}>
+                      <div
+                        className={`max-w-[85%] rounded-2xl px-3.5 py-2.5 text-xs sm:text-[13px] leading-relaxed shadow-xs whitespace-pre-line ${
+                          msg.sender === 'user'
+                            ? 'bg-indigo-600 text-white rounded-br-sm'
+                            : 'bg-white text-slate-800 border border-slate-200/80 rounded-bl-sm'
+                        }`}
+                      >
+                        {msg.text.split(/(\*\*[^*]+\*\*)/g).map((part, idx) =>
+                          part.startsWith('**') && part.endsWith('**') ? (
+                            <strong key={idx}>{part.slice(2, -2)}</strong>
+                          ) : (
+                            <span key={idx}>{part}</span>
+                          )
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Thẻ sản phẩm gợi ý */}
+                    {msg.products && msg.products.length > 0 && (
+                      <div className="space-y-2 pt-1">
+                        {msg.products.map((prod) => (
+                          <div
+                            key={prod.id}
+                            className="bg-white border border-slate-200 rounded-2xl p-2.5 flex items-center gap-3 shadow-xs"
+                          >
+                            <SmartProductImage
+                              src={prod.images?.[0]}
+                              alt={prod.name}
+                              className="w-14 h-14 rounded-xl object-cover shrink-0 border border-slate-100"
+                            />
+                            <div className="flex-1 min-w-0">
+                              <div className="font-bold text-xs text-slate-900 truncate">{prod.name}</div>
+                              <div className="text-xs font-extrabold text-indigo-600 mt-0.5">
+                                {formatVND(prod.price)}
+                              </div>
+                              <div className="flex items-center gap-1.5 mt-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setActiveProduct(prod);
+                                    setActiveImageIdx(0);
+                                    setZoomLevel(1);
+                                  }}
+                                  className="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-semibold transition"
+                                >
+                                  Xem chi tiết
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={prod.stock <= 0}
+                                  onClick={() => addToCart(prod, 1)}
+                                  className="px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 text-white text-[11px] font-semibold transition"
+                                >
+                                  + Giỏ hàng
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    <div
+                      className={`text-[10px] text-slate-400 px-1 ${
+                        msg.sender === 'user' ? 'text-right' : 'text-left'
+                      }`}
+                    >
+                      {msg.time}
+                    </div>
+                  </div>
+                ))}
+
+                {isBotTyping && (
+                  <div className="flex justify-start">
+                    <div className="bg-white border border-slate-200 rounded-2xl px-3.5 py-2 text-xs text-slate-500">
+                      Đang tìm thông tin phù hợp...
+                    </div>
+                  </div>
+                )}
+                <div ref={chatEndRef} />
+              </div>
+
+              {/* Gợi ý nhanh */}
+              <div className="px-3 py-2 bg-white border-t border-slate-100 flex gap-1.5 overflow-x-auto">
+                {[
+                  'Đàn guitar dưới 6 triệu',
+                  'Tai nghe chống ồn',
+                  'Giao hàng & thanh toán',
+                  `Tra cứu đơn ${orders[0]?.id || 'MS-20261118-8421'}`,
+                ].map((chip) => (
+                  <button
+                    key={chip}
+                    type="button"
+                    onClick={() => handleSendChatMessage(chip)}
+                    className="px-2.5 py-1 rounded-full bg-slate-100 hover:bg-indigo-50 hover:text-indigo-700 text-slate-600 text-[11px] font-medium whitespace-nowrap transition shrink-0"
+                  >
+                    {chip}
+                  </button>
+                ))}
+              </div>
+
+              {/* Ô nhập tin nhắn */}
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  handleSendChatMessage();
+                }}
+                className="p-3 bg-white border-t border-slate-200 flex items-center gap-2"
+              >
+                <input
+                  type="text"
+                  value={chatInput}
+                  onChange={(e) => setChatInput(e.target.value)}
+                  placeholder="Hỏi sản phẩm, giá, mã đơn hàng..."
+                  className="flex-1 px-3.5 py-2 rounded-full bg-slate-100 text-xs sm:text-sm outline-none focus:bg-white focus:ring-2 focus:ring-indigo-500/30"
+                />
+                <button
+                  type="submit"
+                  disabled={!chatInput.trim() || isBotTyping}
+                  className="w-9 h-9 rounded-full bg-indigo-600 text-white flex items-center justify-center hover:bg-indigo-700 disabled:bg-slate-300 transition shrink-0"
+                >
+                  <Icon name="send" className="w-4 h-4" />
+                </button>
+              </form>
+            </div>
+          )}
+
+          {/* Nút bong bóng mở/đóng Chatbot */}
+          <button
+            type="button"
+            onClick={() => setIsChatOpen((o) => !o)}
+            className="fixed bottom-4 right-4 sm:right-6 z-50 px-4 py-3 rounded-full bg-gradient-to-r from-indigo-600 to-purple-600 text-white font-bold text-xs sm:text-sm shadow-xl hover:shadow-2xl hover:scale-105 transition flex items-center gap-2"
+          >
+            <Icon name={isChatOpen ? 'x' : 'messageCircle'} className="w-4 h-4" />
+            <span>{isChatOpen ? 'Đóng tư vấn' : 'Tư vấn AI'}</span>
+          </button>
+        </>
       )}
     </div>
   );
